@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createVocStatusEmailHtml } from "@/components/emails/VocStatusEmail";
-import { resend, resendSender } from "@/lib/resend";
+import { smtpSender, smtpTransporter } from "@/lib/smtp";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
 const statuses = ["접수", "검토중", "처리중", "완료", "반려"] as const;
@@ -113,24 +113,23 @@ export async function PATCH(
   let emailErrorMessage: string | null = null;
 
   if (nextStatus === "완료" || nextStatus === "반려") {
-    const { error: emailError } = await resend.emails.send({
-      from: resendSender,
-      to: [voc.email],
-      subject: `[VOC ${nextStatus}] ${voc.company} / ${voc.category} - ${voc.title}`,
-      html: createVocStatusEmailHtml({
-        status: nextStatus,
-        company: voc.company,
-        category: voc.category,
-        title: voc.title,
-        vocId: voc.id,
-      }),
-    });
-
-    if (emailError) {
+    try {
+      await smtpTransporter.sendMail({
+        from: smtpSender,
+        to: voc.email,
+        subject: `[VOC ${nextStatus}] ${voc.company} / ${voc.category} - ${voc.title}`,
+        html: createVocStatusEmailHtml({
+          status: nextStatus,
+          company: voc.company,
+          category: voc.category,
+          title: voc.title,
+          vocId: voc.id,
+        }),
+      });
+      emailSent = true;
+    } catch (emailError) {
       console.error("VOC status email failed:", emailError);
       emailErrorMessage = JSON.stringify(emailError);
-    } else {
-      emailSent = true;
     }
   }
 

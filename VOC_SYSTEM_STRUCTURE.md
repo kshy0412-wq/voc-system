@@ -4,6 +4,129 @@
 
 즉, 하나의 `company + category` 조합은 `assignment_rules.staff_id`를 통해 담당자 1명과 연결되고, VOC가 접수되면 `vocs.assigned_staff_id`에 그 담당자 ID가 저장됩니다.
 
+메일 발송은 현재 **사내 SMTP + Nodemailer** 기준으로 동작합니다.
+
+---
+
+## 0. 전체 기술 구조 요약
+
+현재 VOC 시스템은 Next.js 앱 안에 **화면**, **서버 API**, **메일 발송**, **Supabase 연동**이 함께 들어 있는 구조입니다.
+
+| 영역 | 사용 기술 | 현재 역할 |
+| --- | --- | --- |
+| 프론트엔드 화면 | Next.js App Router, React, TypeScript | VOC 접수 화면, 로그인 화면, 관리자/담당자 목록/상세 화면, 비로그인 조회 화면 구성 |
+| 스타일 | Tailwind CSS | 전체 화면의 카드형 레이아웃, 버튼, 입력창, 상태 badge, 업무 시스템 UI 스타일 적용 |
+| 서버 API | Next.js Route Handler | VOC 저장, 상태 변경, 첨부파일 다운로드 URL 발급, 비로그인 VOC 조회 처리 |
+| DB | Supabase PostgreSQL | VOC 본문, 담당자 배정 규칙, 사용자 프로필, 첨부파일 정보, 활동 이력 저장 |
+| 로그인/Auth | Supabase Auth | 관리자/담당자 로그인 처리 |
+| 권한 정보 | `profiles` 테이블 | 로그인 사용자가 `admin`인지 `staff`인지 판단 |
+| 파일 저장소 | Supabase Storage | 첨부파일 실제 파일 저장 |
+| 파일 메타데이터 | `voc_attachments` 테이블 | 첨부파일명, 파일 경로, 파일 크기, VOC 연결 정보 저장 |
+| 메일 발송 | 사내 SMTP + Nodemailer | VOC 접수 시 담당자 알림, 완료/반려 시 작성자 알림 발송 |
+| 비밀번호 해시 | bcryptjs | 비로그인 조회용 비밀번호를 평문이 아닌 hash로 저장 |
+| 운영 방식 | Windows PC 임시 서버 | `npm run build` 후 `npm run start -- -H 0.0.0.0 -p 3000`으로 사내 네트워크 접속 제공 |
+| 환경변수 | `.env.local` | Supabase 키, SMTP 설정 등 민감 정보를 코드 밖에서 관리 |
+
+### 전체 구조를 쉽게 보면
+
+```text
+사용자 브라우저
+↓
+Next.js 화면
+↓
+Next.js API
+↓
+Supabase DB / Supabase Storage / 사내 SMTP
+```
+
+조금 더 구체적으로 보면 아래와 같습니다.
+
+```text
+[일반 사용자]
+  ↓
+  / VOC 접수 화면
+  ↓
+  POST /api/vocs
+  ↓
+  Supabase DB에 VOC 저장
+  ↓
+  Supabase Storage에 첨부파일 저장
+  ↓
+  사내 SMTP로 담당자에게 접수 메일 발송
+
+[관리자/담당자]
+  ↓
+  /login 로그인
+  ↓
+  Supabase Auth로 사용자 확인
+  ↓
+  profiles.role로 관리자/담당자 권한 판단
+  ↓
+  /admin/vocs에서 VOC 조회
+  ↓
+  상태 변경 시 PATCH /api/vocs/[id]/status
+  ↓
+  완료/반려이면 사내 SMTP로 작성자에게 결과 메일 발송
+
+[비로그인 조회 사용자]
+  ↓
+  /lookup
+  ↓
+  접수번호 + 조회용 비밀번호 입력
+  ↓
+  POST /api/vocs/lookup
+  ↓
+  bcrypt.compare로 비밀번호 확인
+  ↓
+  VOC 상세/첨부파일/활동 이력 조회
+```
+
+### Supabase가 담당하는 것
+
+| Supabase 기능 | 사용 위치 | 설명 |
+| --- | --- | --- |
+| DB | `vocs`, `assignment_rules`, `profiles`, `voc_attachments`, `voc_activities` | 시스템의 주요 데이터를 저장 |
+| Auth | `/login`, 관리자/담당자 페이지 | 관리자와 담당자 로그인 인증 |
+| Storage | 첨부파일 업로드/다운로드 | 실제 첨부파일을 비공개로 저장 |
+| Service Role Key | 서버 API 내부 | 비로그인 VOC 접수처럼 서버가 안전하게 DB 저장을 수행할 때 사용 |
+
+### 사내 SMTP가 담당하는 것
+
+| 메일 종류 | 발송 시점 | 받는 사람 | 템플릿 |
+| --- | --- | --- | --- |
+| 신규 VOC 접수 알림 | 일반 사용자가 VOC 접수 성공 후 | 배정된 담당자 | `VocReceivedEmail.tsx` |
+| VOC 완료 알림 | 관리자/담당자가 상태를 `완료`로 변경 | 작성자 이메일 | `VocStatusEmail.tsx` |
+| VOC 반려 알림 | 관리자/담당자가 상태를 `반려`로 변경 | 작성자 이메일 | `VocStatusEmail.tsx` |
+
+SMTP 설정은 `.env.local`에 저장합니다.
+
+```env
+SMTP_HOST=
+SMTP_PORT=
+SMTP_FROM=
+```
+
+인증이 필요한 SMTP 서버라면 아래 값도 추가할 수 있습니다.
+
+```env
+SMTP_USER=
+SMTP_PASS=
+```
+
+현재 사내 SMTP는 인증 없이 동작하는 방식으로 확인되었습니다.
+
+### 민감 정보 관리
+
+아래 값들은 GitHub에 올리면 안 됩니다.
+
+| 값 | 이유 |
+| --- | --- |
+| `SUPABASE_SERVICE_ROLE_KEY` | DB 보안 정책을 우회할 수 있는 강한 서버 키 |
+| `SMTP_PASS` | 메일 계정 또는 SMTP 인증 비밀번호 |
+| `.env.local` | 실제 운영 환경변수가 들어 있는 파일 |
+
+그래서 `.env.local`은 `.gitignore`에 의해 GitHub 업로드 대상에서 제외되어 있습니다.
+
 ---
 
 ## 1. 사용자 역할 구조
@@ -20,12 +143,16 @@
 
 일반 사용자는 `/` 메인 접수 화면에서 VOC를 등록합니다.
 
+첨부파일은 기존 파일 선택 버튼과 드래그 앤 드롭을 모두 지원합니다.
+
 흐름은 아래와 같습니다.
 
 ```text
 일반 사용자
 ↓
 / 페이지에서 VOC 입력
+↓
+파일 선택 또는 드래그 앤 드롭으로 첨부파일 추가
 ↓
 POST /api/vocs 호출
 ↓
@@ -42,6 +169,8 @@ vocs 테이블 저장
 voc_attachments 테이블 저장
 ↓
 담당자에게 이메일 발송
+↓
+접수 성공 모달에 접수번호 안내
 ```
 
 ### vocs 테이블에 저장되는 주요 값
@@ -78,6 +207,8 @@ password_hash 컬럼에 hash 값 저장
 | 파일 정보 | `voc_attachments` 테이블 |
 | 저장 정보 | `voc_id`, `file_name`, `file_path`, `file_size` |
 
+첨부파일은 프론트에서 `selectedFiles` 배열로 관리되고, 등록 시 `FormData`의 `files` 필드로 전송됩니다.
+
 ---
 
 ## 3. 담당자 자동 배정 규칙
@@ -108,16 +239,35 @@ password_hash 컬럼에 hash 값 저장
 
 ## 4. 이메일 발송 흐름
 
+현재 이메일 발송 방식은 아래와 같습니다.
+
+| 항목 | 현재 구조 |
+| --- | --- |
+| 메일 라이브러리 | `nodemailer` |
+| SMTP 설정 파일 | `src/lib/smtp.ts` |
+| SMTP 서버 | `.env.local`의 `SMTP_HOST`, `SMTP_PORT` |
+| 보안 옵션 | 포트 25 기준 `secure: false` |
+| 인증 | `SMTP_USER`, `SMTP_PASS`가 둘 다 있을 때만 적용 |
+| 발신자 | `SMTP_FROM` |
+| 비밀번호 저장 | 코드에 하드코딩하지 않고 `.env.local`에만 저장 |
+
 | 케이스 | 발송 대상 | 이메일 주소 출처 | 발송 조건 | 메일 내용 요약 |
 | --- | --- | --- | --- | --- |
-| VOC 신규 접수 시 | 배정된 담당자 1명 | `assignment_rules.staff_id`로 `profiles.email` 조회 | VOC 저장 성공 후 | 회사, 유형, 제목, 작성자, 접수 ID |
-| VOC 완료 처리 시 | 작성자 | `vocs.email` | 상태가 `완료`로 변경될 때 | 완료 안내, 회사, 유형, 제목, 접수 ID |
-| VOC 반려 처리 시 | 작성자 | `vocs.email` | 상태가 `반려`로 변경될 때 | 반려 안내, 회사, 유형, 제목, 접수 ID |
+| VOC 신규 접수 시 | 배정된 담당자 1명 | `assignment_rules.staff_id`로 `profiles.email` 조회 | VOC 저장 성공 후 | HTML 메일, 회사, 유형, 제목, 작성자, 접수 ID |
+| VOC 완료 처리 시 | 작성자 | `vocs.email` | 상태가 `완료`로 변경될 때 | HTML 메일, 완료 안내, 회사, 유형, 제목, 접수 ID |
+| VOC 반려 처리 시 | 작성자 | `vocs.email` | 상태가 `반려`로 변경될 때 | HTML 메일, 반려 안내, 회사, 유형, 제목, 접수 ID |
 | 검토중/처리중/접수 변경 시 | 발송 없음 | 해당 없음 | 메일 발송 조건 아님 | 없음 |
 
 신규 접수 메일은 담당자에게 갑니다.
 
 완료/반려 메일은 VOC 작성자가 입력한 이메일 주소로 갑니다.
+
+메일 템플릿은 아래 파일에서 관리합니다.
+
+| 템플릿 파일 | 용도 |
+| --- | --- |
+| `src/components/emails/VocReceivedEmail.tsx` | 신규 VOC 접수 시 담당자에게 보내는 HTML 메일 |
+| `src/components/emails/VocStatusEmail.tsx` | 완료/반려 시 작성자에게 보내는 HTML 메일 |
 
 ---
 
@@ -224,10 +374,12 @@ VOC가 없는 경우, 비밀번호가 틀린 경우, `password_hash`가 없는 �
 | 일반 사용자 조회 | 접수번호 + 조회용 비밀번호 |
 | 관리자 조회 | 전체 VOC 조회 가능 |
 | 담당자 조회 | 본인에게 배정된 VOC만 조회 가능 |
-| 신규 접수 메일 | 담당자에게 발송 |
-| 완료/반려 메일 | 작성자에게 발송 |
+| 신규 접수 메일 | 담당자에게 HTML 메일 발송 |
+| 완료/반려 메일 | 작성자에게 HTML 메일 발송 |
 | 검토중/처리중/접수 변경 메일 | 발송하지 않음 |
 | 조회용 비밀번호 저장 | 평문 저장 금지, bcrypt hash 저장 |
+| 메일 발송 방식 | 사내 SMTP + Nodemailer |
+| 임시 서버 실행 | Windows PC에서 `npm run build` 후 `npm run start -- -H 0.0.0.0 -p 3000` |
 
 ---
 
@@ -244,7 +396,7 @@ VOC 정보 입력
 ↓
 조회용 비밀번호 입력
 ↓
-첨부파일 선택
+파일 선택 또는 드래그 앤 드롭으로 첨부파일 추가
 ↓
 POST /api/vocs
 ↓
@@ -309,9 +461,35 @@ VOC 상세/첨부파일/활동 이력 표시
 일반 사용자
 → VOC 접수
 → 회사 + 유형 기준 담당자 1명 자동 배정
-→ 담당자에게 접수 메일
+→ 담당자에게 HTML 접수 메일
 → 담당자 또는 관리자가 처리
-→ 완료/반려 시 작성자에게 메일
+→ 완료/반려 시 작성자에게 HTML 메일
 → 일반 사용자는 접수번호 + 비밀번호로 조회
 ```
+
+## 현재 실행/운영 방식
+
+현재는 Vercel 배포 대신 Windows PC를 사내 임시 서버처럼 사용할 수 있습니다.
+
+실행 순서는 아래와 같습니다.
+
+```cmd
+D:
+cd D:\ks_cursor\VOC_ks
+npm run build
+npm run start -- -H 0.0.0.0 -p 3000
+```
+
+같은 네트워크의 다른 PC는 아래 주소로 접속합니다.
+
+```text
+http://내PC_IP:3000
+```
+
+주의사항:
+
+- 서버 CMD 창을 닫으면 서비스도 꺼집니다.
+- PC가 절전모드에 들어가면 접속이 끊깁니다.
+- Windows 방화벽에서 3000 포트가 허용되어야 합니다.
+- `.env.local`은 GitHub에 올리지 않고 로컬 서버에서만 사용합니다.
 

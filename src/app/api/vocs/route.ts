@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 
-import { resend, resendSender } from "@/lib/resend";
+import { createVocReceivedEmailHtml } from "@/components/emails/VocReceivedEmail";
+import { smtpSender, smtpTransporter } from "@/lib/smtp";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
 const companies = ["Ramos", "CTST"] as const;
@@ -239,22 +240,29 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const { error: emailError } = await resend.emails.send({
-    from: resendSender,
-    to: [assignedStaff.email],
-    subject: `[VOC 접수] ${company} / ${category} - ${title}`,
-    text: [
-      "새 VOC가 접수되었습니다.",
-      "",
-      `회사: ${company}`,
-      `유형: ${category}`,
-      `제목: ${title}`,
-      `작성자: ${writerName}`,
-      `접수 ID: ${voc.id}`,
-    ].join("\n"),
-  });
-
-  if (emailError) {
+  try {
+    await smtpTransporter.sendMail({
+      from: smtpSender,
+      to: assignedStaff.email,
+      subject: `[VOC 접수] ${company} / ${category} - ${title}`,
+      html: createVocReceivedEmailHtml({
+        company,
+        category,
+        title,
+        writerName,
+        vocId: voc.id,
+      }),
+      text: [
+        "새 VOC가 접수되었습니다.",
+        "",
+        `회사: ${company}`,
+        `유형: ${category}`,
+        `제목: ${title}`,
+        `작성자: ${writerName}`,
+        `접수 ID: ${voc.id}`,
+      ].join("\n"),
+    });
+  } catch (emailError) {
     console.error("Failed to send VOC notification email:", emailError);
   }
 

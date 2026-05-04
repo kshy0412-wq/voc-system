@@ -31,7 +31,7 @@
 - Supabase DB
 - Supabase Auth
 - Supabase Storage
-- Resend
+- Nodemailer SMTP
 
 ## 실행 방법
 
@@ -64,14 +64,17 @@ http://localhost:3000
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-RESEND_API_KEY=
-RESEND_FROM_EMAIL=
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
 ```
 
 주의:
 
 - `SUPABASE_SERVICE_ROLE_KEY`는 서버 전용 키입니다.
-- `RESEND_API_KEY`는 이메일 발송용 비밀키입니다.
+- `SMTP_PASS`는 이메일 발송용 비밀키입니다.
 - 위 두 값은 실제 값으로 문서나 브라우저 코드에 노출하면 안 됩니다.
 
 ## 시스템 구조
@@ -235,7 +238,7 @@ voc_activities 기록
 발신 주소:
 
 ```text
-RESEND_FROM_EMAIL
+SMTP_FROM
 ```
 
 ## 폴더 구조
@@ -267,7 +270,7 @@ src
 └─ lib
    ├─ supabase.ts
    ├─ supabase-admin.ts
-   └─ resend.ts
+   └─ smtp.ts
 ```
 
 ## 향후 확장 가능 기능
