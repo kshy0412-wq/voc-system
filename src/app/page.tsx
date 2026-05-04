@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { type DragEvent, type FormEvent, useState } from "react";
 
 const companies = ["Ramos", "CTST"];
 const categories = ["고충", "제안", "안전", "소통", "시스템문의", "기타"];
@@ -55,6 +55,7 @@ export default function Home() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [successReceiptNo, setSuccessReceiptNo] = useState("");
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   const updateField = <K extends keyof VocForm>(
     field: K,
@@ -112,6 +113,21 @@ export default function Home() {
     }
 
     return nextErrors;
+  };
+
+  const appendSelectedFiles = (files: File[]) => {
+    setSelectedFiles((currentFiles) => [...currentFiles, ...files]);
+  };
+
+  const handleFileDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsDraggingFile(false);
+
+    const droppedFiles = Array.from(event.dataTransfer.files);
+
+    if (droppedFiles.length > 0) {
+      appendSelectedFiles(droppedFiles);
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -383,19 +399,35 @@ export default function Home() {
 
           <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
             <h2 className="text-base font-semibold text-slate-900">첨부파일</h2>
-            <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center transition hover:border-blue-300 hover:bg-blue-50">
+            <label
+              className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-6 text-center transition ${
+                isDraggingFile
+                  ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100"
+                  : "border-slate-300 bg-white hover:border-blue-300 hover:bg-blue-50"
+              }`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsDraggingFile(true);
+              }}
+              onDragLeave={() => setIsDraggingFile(false)}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDraggingFile(true);
+              }}
+              onDrop={handleFileDrop}
+            >
               <span className="text-sm font-semibold text-slate-700">
-                파일 선택
+                파일 선택 또는 드래그 앤 드롭
               </span>
               <span className="mt-1 text-xs text-slate-500">
-                선택한 파일은 VOC 등록 시 함께 업로드됩니다.
+                여러 파일을 선택하거나 이 영역에 끌어다 놓을 수 있습니다.
               </span>
               <input
                 className="sr-only"
                 key={fileInputKey}
                 multiple
                 onChange={(event) =>
-                  setSelectedFiles(Array.from(event.target.files ?? []))
+                  appendSelectedFiles(Array.from(event.target.files ?? []))
                 }
                 type="file"
               />
